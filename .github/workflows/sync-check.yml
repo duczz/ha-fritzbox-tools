@@ -1,0 +1,112 @@
+name: Upstream Sync Check
+
+on:
+  schedule:
+    - cron: "0 8 * * 1"  # every Monday 08:00 UTC
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Check for upstream changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare upstream against baseline snapshots
+        id: diff
+        run: |
+          BASE_URL="https://raw.githubusercontent.com/home-assistant/core/dev/homeassistant/components/fritz"
+          SNAPSHOT_DIR=".github/upstream-snapshots"
+          FILES=(
+            "__init__.py" "binary_sensor.py" "button.py" "config_flow.py"
+            "const.py" "coordinator.py" "device_tracker.py" "diagnostics.py"
+            "entity.py" "helpers.py" "icons.json" "image.py" "manifest.json"
+            "models.py" "quality_scale.yaml" "sensor.py" "services.py"
+            "services.yaml" "strings.json" "switch.py" "update.py"
+          )
+
+          mkdir -p "$SNAPSHOT_DIR"
+          mkdir -p /tmp/upstream
+
+          CHANGED=""
+          DIFF_BODY=""
+
+          for f in "${FILES[@]}"; do
+            curl -sL "$BASE_URL/$f" -o "/tmp/upstream/$f"
+            SNAPSHOT="$SNAPSHOT_DIR/${f}.txt"
+
+            if [ ! -f "$SNAPSHOT" ]; then
+              cp "/tmp/upstream/$f" "$SNAPSHOT"
+            elif ! diff -q "$SNAPSHOT" "/tmp/upstream/$f" > /dev/null 2>&1; then
+              CHANGED="$CHANGED $f"
+              FILE_DIFF=$(diff "$SNAPSHOT" "/tmp/upstream/$f" || true)
+              DIFF_BODY="${DIFF_BODY}
+
+          ### \`$f\`
+          \`\`\`diff
+          ${FILE_DIFF}
+          \`\`\`"
+              cp "/tmp/upstream/$f" "$SNAPSHOT"
+            fi
+          done
+
+          if [ -n "$CHANGED" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "files=$CHANGED" >> $GITHUB_OUTPUT
+            echo "$DIFF_BODY" > /tmp/diff_body.txt
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Read diff body
+        id: body
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          {
+            echo 'content<<EOF'
+            cat /tmp/diff_body.txt
+            echo 'EOF'
+          } >> $GITHUB_OUTPUT
+
+      - name: Create Pull Request
+        if: steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream-sync/ha-core
+          delete-branch: true
+          title: "⬆️ Upstream sync: HA Core fritz changes"
+          labels: upstream-sync
+          body: |
+            ## Upstream changes detected
+
+            The following files changed upstream since the last review:
+
+            `${{ steps.diff.outputs.files }}`
+
+            **Review upstream commits:** https://github.com/home-assistant/core/commits/dev/homeassistant/components/fritz
+
+            > Merging this PR advances the baseline — the local files in this repo are **not modified**.
+            > Manually apply any upstream improvements that make sense.
+
+            ---
+
+            ${{ steps.body.outputs.content }}
+          commit-message: "chore: advance upstream baseline"
+
+      - name: Initialize snapshots (first run)
+        if: steps.diff.outputs.changed == 'false'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream-sync/init-snapshots
+          delete-branch: true
+          title: "chore: initialize upstream baseline snapshots"
+          labels: upstream-sync
+          body: |
+            Initializes `.github/upstream-snapshots/` with the current upstream state.
+            Merge this once — future sync PRs will only show **new** upstream changes.
+          commit-message: "chore: initialize upstream baseline snapshots"
