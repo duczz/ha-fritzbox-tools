@@ -106,6 +106,8 @@ Auto-discovery via SSDP is supported — if your FRITZ!Box is on the local netwo
 
   The fix moves the QR code fetch into the existing coordinator (`_async_update_data`), rewrites `FritzGuestWifiQRImage` to extend `CoordinatorEntity` with `_attr_should_poll = False`, and reacts to updates via `_handle_coordinator_update` — no extra HTTP request. ([`coordinator.py`](homeassistant/components/fritz/coordinator.py), [`image.py`](homeassistant/components/fritz/image.py))
 
+- **No ERROR log on connection loss during service calls** — When a `ConnectionError` occurs inside `_async_service_call` (e.g. during nightly DSL forced reconnects), the integration now silently schedules a reload instead of writing an ERROR entry to the HA log. Consistent with the existing behavior in `_async_update_data`. (`coordinator.py`)
+
 ---
 
 ## 🤝 Contributing
