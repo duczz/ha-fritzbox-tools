@@ -759,12 +759,15 @@ class AvmWrapper(FritzBoxTools):
                 " verify that you can log into the web interface"
             )
             return {}
-        except FRITZ_EXCEPTIONS:
-            _LOGGER.exception(
-                "Service/Action Error: cannot execute service %s with action %s",
+        except FRITZ_EXCEPTIONS as ex:
+            _LOGGER.debug(
+                "Reload %s due to error '%s' on service %s action %s",
+                self.config_entry.title,
+                ex,
                 service_name,
                 action_name,
             )
+            self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
             return {}
         return result
 
