@@ -108,6 +108,12 @@ Auto-discovery via SSDP is supported — if your FRITZ!Box is on the local netwo
 
 - **No ERROR log on connection loss during service calls** — When a `ConnectionError` occurs inside `_async_service_call` (e.g. during nightly DSL forced reconnects), the integration now silently schedules a reload instead of writing an ERROR entry to the HA log. Consistent with the existing behavior in `_async_update_data`. (`coordinator.py`)
 
+- **Retry on RemoteDisconnected (`ConnectionError`)** — Stale pooled HTTP keep-alive connections that are silently closed by the FRITZ!Box now trigger a single transparent retry instead of crashing the update loop and reloading the integration.
+
+### ✨ New Features
+
+- **More detailed diagnostics** — Diagnostics export now includes device uptime and extra firmware information to help with troubleshooting (backported from upstream PR #3).
+
 ---
 
 ## 🤝 Contributing

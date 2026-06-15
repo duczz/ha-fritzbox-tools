@@ -17,6 +17,7 @@ from fritzconnection.lib.fritzcall import FritzCall
 from fritzconnection.lib.fritzhosts import FritzHosts
 from fritzconnection.lib.fritzstatus import FritzStatus
 from fritzconnection.lib.fritzwlan import FritzGuestWLAN
+from requests.exceptions import ConnectionError
 import xmltodict
 
 from homeassistant.components.device_tracker import (
@@ -109,7 +110,7 @@ class FritzConnectionCached(FritzConnection):  # type: ignore[misc]
     ) -> dict[str, Any]:
         """Call action with cached services. Only get actions are cached."""
         if not action_name.lower().startswith("get"):
-            return super().call_action(  # type: ignore[no-any-return]
+            return self._execute_call_action(
                 service_name, action_name, arguments=arguments, **kwargs
             )
 
@@ -123,11 +124,32 @@ class FritzConnectionCached(FritzConnection):  # type: ignore[misc]
             _LOGGER.debug("Using cached result for %s %s", service_name, action_name)
             return result
 
-        result = super().call_action(
+        result = self._execute_call_action(
             service_name, action_name, arguments=arguments, **kwargs
         )
         self._call_cache[cache_key] = result
         return result  # type: ignore[no-any-return]
+
+    def _execute_call_action(
+        self,
+        service_name: str,
+        action_name: str,
+        *,
+        arguments: dict | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Execute call action with retry."""
+        try:
+            return super().call_action(  # type: ignore[no-any-return]
+                service_name, action_name, arguments=arguments, **kwargs
+            )
+        except ConnectionError as ex:
+            _LOGGER.debug(
+                "Connection error during %s:%s, retrying once: %s", service_name, action_name, ex
+            )
+            return super().call_action(  # type: ignore[no-any-return]
+                service_name, action_name, arguments=arguments, **kwargs
+            )
 
 
 class FritzBoxTools(DataUpdateCoordinator[UpdateCoordinatorDataType]):
@@ -908,3 +930,15 @@ class AvmWrapper(FritzBoxTools):
             "X_AVM-DE_WakeOnLANByMACAddress",
             NewMACAddress=mac_address,
         )
+
+    async def async_get_firmware_extra_infos(self) -> dict[str, Any]:
+        """Return extra infos for firmware."""
+        return await self._async_service_call("UserInterface", "1", "X_AVM-DE_GetInfo")
+
+    async def async_get_device_uptime_hours(self) -> int:
+        """Get device uptime in hours."""
+
+        def _get_uptime_hours() -> int:
+            return int(self.fritz_status.device_uptime // 3600)
+
+        return await self.hass.async_add_executor_job(_get_uptime_hours)
