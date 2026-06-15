@@ -126,7 +126,7 @@ Pull requests are welcome. For larger changes, please open an issue first to dis
 [hacs-url]: https://hacs.xyz
 [ha-badge]: https://img.shields.io/badge/Home%20Assistant-2024.1+-41BDF5.svg?style=for-the-badge&logo=homeassistant&logoColor=white
 [ha-url]: https://www.home-assistant.io/integrations/fritz
-[version-badge]: https://img.shields.io/badge/version-1.0.0-22c55e.svg?style=for-the-badge&logo=github&logoColor=white
+[version-badge]: https://img.shields.io/badge/version-1.1.0-22c55e.svg?style=for-the-badge&logo=github&logoColor=white
 [release-url]: https://github.com/duczz/fritzbox-tools/releases
 [license-badge]: https://img.shields.io/badge/license-MIT-94a3b8.svg?style=for-the-badge
 [hacs-add-badge]: https://my.home-assistant.io/badges/hacs_repository.svg
