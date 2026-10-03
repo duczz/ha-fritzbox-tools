@@ -82,4 +82,4 @@ template: |
   $CHANGES
 
   ---
-  **Full Changelog**: https://github.com/duczz/fritzbox-tools/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
