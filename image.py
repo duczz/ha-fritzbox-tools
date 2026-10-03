@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 import logging
-
-from requests.exceptions import RequestException
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util, slugify
 
 from .const import DOMAIN, Platform
@@ -73,13 +71,20 @@ async def async_setup_entry(
     )
 
 
-class FritzGuestWifiQRImage(FritzBoxBaseEntity, ImageEntity):
-    """Implementation of the FritzBox guest wifi QR code image entity."""
+class FritzGuestWifiQRImage(
+    CoordinatorEntity[AvmWrapper], FritzBoxBaseEntity, ImageEntity
+):
+    """Implementation of the FritzBox guest wifi QR code image entity.
+
+    Fork patch: no own polling. The QR code is fetched by the coordinator
+    (``coordinator.py`` -> ``_async_update_guest_wifi_qr``) and read from
+    ``coordinator.data["guest_wifi_qr"]``.
+    """
 
     _attr_content_type = "image/png"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_has_entity_name = True
-    _attr_should_poll = True
+    _attr_should_poll = False
 
     def __init__(
         self,
@@ -92,42 +97,33 @@ class FritzGuestWifiQRImage(FritzBoxBaseEntity, ImageEntity):
         self._attr_name = ssid
         self._attr_unique_id = f"{avm_wrapper.unique_id}-guest_wifi_qr_code"
         self._current_qr_bytes: bytes | None = None
-        super().__init__(avm_wrapper, device_friendly_name)
+        # The base classes do not chain __init__, so each one is called explicitly.
+        CoordinatorEntity.__init__(self, avm_wrapper)
+        FritzBoxBaseEntity.__init__(self, avm_wrapper, device_friendly_name)
         ImageEntity.__init__(self, hass)
 
-    def _fetch_image(self) -> bytes:
-        """Fetch the QR code from the Fritz!Box."""
-        qr_stream: BytesIO = self._avm_wrapper.fritz_guest_wifi.get_wifi_qr_code(
-            "png", border=2
-        )
-        qr_bytes = qr_stream.getvalue()
-        _LOGGER.debug("fetched %s bytes", len(qr_bytes))
-
-        return qr_bytes
-
-    async def async_added_to_hass(self) -> None:
-        """Fetch and set initial data and state."""
-        self._current_qr_bytes = await self.hass.async_add_executor_job(
-            self._fetch_image
-        )
-        self._attr_image_last_updated = dt_util.utcnow()
-
-    async def async_update(self) -> None:
-        """Update the image entity data."""
-        try:
-            qr_bytes = await self.hass.async_add_executor_job(self._fetch_image)
-        except RequestException:
+    def _update_from_coordinator(self) -> None:
+        """Take the QR code from the coordinator data."""
+        qr_bytes = self.coordinator.data.get("guest_wifi_qr")
+        if qr_bytes is None:
             self._current_qr_bytes = None
             self._attr_image_last_updated = None
-            self.async_write_ha_state()
             return
-
         if self._current_qr_bytes != qr_bytes:
-            dt_now = dt_util.utcnow()
             _LOGGER.debug("qr code has changed, reset image last updated property")
-            self._attr_image_last_updated = dt_now
             self._current_qr_bytes = qr_bytes
-            self.async_write_ha_state()
+            self._attr_image_last_updated = dt_util.utcnow()
+
+    async def async_added_to_hass(self) -> None:
+        """Set initial data from the coordinator."""
+        await super().async_added_to_hass()
+        self._update_from_coordinator()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        self._update_from_coordinator()
+        super()._handle_coordinator_update()
 
     async def async_image(self) -> bytes | None:
         """Return bytes of image."""

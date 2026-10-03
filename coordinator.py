@@ -17,7 +17,7 @@ from fritzconnection.lib.fritzcall import FritzCall
 from fritzconnection.lib.fritzhosts import FritzHosts
 from fritzconnection.lib.fritzstatus import FritzStatus
 from fritzconnection.lib.fritzwlan import FritzGuestWLAN
-from requests.exceptions import ConnectionError
+from requests.exceptions import ConnectionError, RequestException
 import xmltodict
 
 from homeassistant.components.device_tracker import (
@@ -63,6 +63,11 @@ _LOGGER = logging.getLogger(__name__)
 
 FRITZ_DATA_KEY: HassKey[FritzData] = HassKey(DOMAIN)
 
+# Fork patch: the guest wifi QR code only changes with the guest password, so it
+# is fetched every QR_REFRESH_CYCLES coordinator updates (10 x 30 s = 5 min) and
+# right after a password change, instead of by the image entity on every poll.
+QR_REFRESH_CYCLES = 10
+
 type FritzConfigEntry = ConfigEntry[AvmWrapper]
 
 
@@ -88,6 +93,7 @@ class UpdateCoordinatorDataType(TypedDict):
 
     call_deflections: dict[int, dict]
     entity_states: dict[str, StateType | bool]
+    guest_wifi_qr: bytes | None
 
 
 class FritzConnectionCached(FritzConnection):  # type: ignore[misc]
@@ -196,6 +202,8 @@ class FritzBoxTools(DataUpdateCoordinator[UpdateCoordinatorDataType]):
         self.use_tls = use_tls
         self.device_discovery_enabled = device_discovery_enabled
         self.has_call_deflections: bool = False
+        self._guest_wifi_qr: bytes | None = None
+        self._qr_cycles_until_refresh = 0
         self._model: str | None = None
         self._current_firmware: str | None = None
         self._latest_firmware: str | None = None
@@ -325,6 +333,7 @@ class FritzBoxTools(DataUpdateCoordinator[UpdateCoordinatorDataType]):
         entity_data: UpdateCoordinatorDataType = {
             "call_deflections": {},
             "entity_states": {},
+            "guest_wifi_qr": None,
         }
         self.connection.clear_cache()
         try:
@@ -354,11 +363,40 @@ class FritzBoxTools(DataUpdateCoordinator[UpdateCoordinatorDataType]):
                 translation_placeholders={"error": str(ex)},
             ) from ex
 
-        _LOGGER.debug("entity_data: %s", entity_data)
+        entity_data["guest_wifi_qr"] = await self._async_update_guest_wifi_qr()
+
+        _LOGGER.debug(
+            "entity_data: %s",
+            {**entity_data, "guest_wifi_qr": len(entity_data["guest_wifi_qr"] or b"")},
+        )
 
         await self.async_trigger_cleanup()
 
         return entity_data
+
+    async def _async_update_guest_wifi_qr(self) -> bytes | None:
+        """Return the guest wifi QR code, refetched every QR_REFRESH_CYCLES updates.
+
+        Fork patch: the image entity used to fetch the QR code itself on every
+        poll (blocking HTTP, "Update of image... is taking over 10 seconds" on
+        slow boxes). A failed fetch must not reload the whole integration, so it
+        is handled here and retried on the next update.
+        """
+        if self._qr_cycles_until_refresh > 0:
+            self._qr_cycles_until_refresh -= 1
+            return self._guest_wifi_qr
+        try:
+            qr_stream = await self.hass.async_add_executor_job(
+                partial(self.fritz_guest_wifi.get_wifi_qr_code, "png", border=2)
+            )
+        except (RequestException, *FRITZ_EXCEPTIONS) as ex:
+            _LOGGER.debug("Guest wifi QR code fetch failed: %s", ex)
+            self._guest_wifi_qr = None
+            return None
+        self._guest_wifi_qr = qr_stream.getvalue()
+        self._qr_cycles_until_refresh = QR_REFRESH_CYCLES - 1
+        _LOGGER.debug("fetched guest wifi QR code, %s bytes", len(self._guest_wifi_qr))
+        return self._guest_wifi_qr
 
     @property
     def unique_id(self) -> str:
@@ -703,6 +741,9 @@ class FritzBoxTools(DataUpdateCoordinator[UpdateCoordinatorDataType]):
         await self.hass.async_add_executor_job(
             self.fritz_guest_wifi.set_password, password, length
         )
+        # The QR code encodes the password: refetch it on the next update.
+        self._qr_cycles_until_refresh = 0
+        await self.async_request_refresh()
 
     async def async_trigger_dial(self, number: str, max_ring_seconds: int) -> None:
         """Trigger service to dial a number."""
